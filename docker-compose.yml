@@ -1,0 +1,120 @@
+services:
+  tracker_nginx:
+    image: nginx:1.21-alpine
+    restart: on-failure
+    depends_on:
+      - tracker_telegram-api-server
+    ports:
+      - "80:80"
+    volumes:
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
+      - ./nginx:/etc/nginx/conf.d/
+
+  tracker_telegram-api-server:
+    image: aiogram/telegram-bot-api:latest
+    restart: on-failure
+    env_file:
+      - .env
+    volumes:
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
+    ports:
+      - "8081:8081"
+
+  tracker_db:
+    image: postgres:latest
+    restart: always
+    container_name: tracker_postgres-container
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  tracker_redis:
+    image: redis:latest
+    restart: always
+    container_name: tracker_redis-container
+    command: [ "redis-server", "--requirepass", "${REDIS_PASSWORD}" ]
+    env_file:
+      - '.env'
+    ports:
+      - "6379:6379"
+
+  tracker_tg_bot:
+    image: "bot"
+    restart: always
+    stop_signal: SIGINT
+    container_name: tracker_bot-container
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+    env_file:
+      - '.env'
+    depends_on:
+      - tracker_db
+      - tracker_redis
+      - tracker_telegram-api-server
+
+  tracker_service:
+    build: 
+      context: ./micro-services/tracker
+      dockerfile: Dockerfile
+    depends_on:
+      - tracker_redis
+    env_file:
+      - '.env'
+    ports:
+      - "9090:9090"  # metrics
+      - "8085:8085"  # health check
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8085/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    ports:
+      - "9091:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+
+  grafana:
+    image: grafana/grafana
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/solana_tracker.json
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  telegram-bot-api-data:
+    driver: "local"
+
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
