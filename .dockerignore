@@ -1,0 +1,7 @@
+venv/
+.idea/
+cache/
+README.MD
+db.db
+micro-services/
+.mypy_cahce/
